@@ -32,9 +32,7 @@ logger = get_logger(__name__)
 
 @register_stack_component_class
 class AWSStepFunctionOrchestrator(BaseOrchestrator):
-    """Orchestrator responsible for running pipelines using AWS Step Functions.
-
-    """
+    """Orchestrator responsible for running pipelines using AWS Step Functions."""
 
     # Class Configuration
     FLAVOR: ClassVar[str] = AWS_STEP_FUNCTION
@@ -90,7 +88,6 @@ class AWSStepFunctionOrchestrator(BaseOrchestrator):
         logger.debug(f"Using deployment config:\n {deployment_config}")
         logger.debug(f"Using connection config:\n {connection_config}")
 
-
         # AWS STEP FUNCTION
         import stepfunctions
         import logging
@@ -108,7 +105,9 @@ class AWSStepFunctionOrchestrator(BaseOrchestrator):
         basic_path = Chain([start_pass_state])
 
         basic_workflow = Workflow(
-            name="MyWorkflow_Simple", definition=basic_path, role=workflow_execution_role
+            name="MyWorkflow_Simple",
+            definition=basic_path,
+            role=workflow_execution_role,
         )
         print(basic_workflow.definition.to_json(pretty=True))
 
@@ -119,9 +118,11 @@ class AWSStepFunctionOrchestrator(BaseOrchestrator):
 
         def lambda_handler(event, context):
             return {
-                'statusCode': 200,
-                'input': event['input'],
-                'output': base64.b64encode(event['input'].encode()).decode('UTF-8')
+                "statusCode": 200,
+                "input": event["input"],
+                "output": base64.b64encode(event["input"].encode()).decode(
+                    "UTF-8"
+                ),
             }
 
         lambda_state = LambdaStep(
@@ -131,7 +132,6 @@ class AWSStepFunctionOrchestrator(BaseOrchestrator):
                 "Payload": {"input": "HelloWorld"},
             },
         )
-
 
         # Run each component. Note that the pipeline.components list is in
         # topological order.
