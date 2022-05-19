@@ -14,6 +14,7 @@
 
 AIRFLOW = "airflow"
 AWS = "aws"
+AWS_STEP_FUNCTION = "aws_step_function"
 AZURE = "azure"
 AZUREML = "azureml"
 DASH = "dash"
