@@ -24,7 +24,7 @@ class AWSStepFunctionIntegation(Integration):
     """Definition of Kubeflow Integration for ZenML."""
 
     NAME = AWS_STEP_FUNCTION
-    REQUIREMENTS = ["stepfunctions>=2.3.0"]
+    REQUIREMENTS = ["stepfunctions>=2.3.0", "boto3>=1.23.0"]
 
     @classmethod
     def activate(cls) -> None:
