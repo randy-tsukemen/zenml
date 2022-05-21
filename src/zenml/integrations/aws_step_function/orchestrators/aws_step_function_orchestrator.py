@@ -36,7 +36,7 @@ import logging
 
 import sagemaker
 import stepfunctions
-from stepfunctions.steps import ModelStep, Pass, Chain
+from stepfunctions.steps import TrainingStep, Chain
 from stepfunctions.workflow import Workflow
 
 stepfunctions.set_stream_logger(level=logging.INFO)
@@ -51,12 +51,33 @@ logger = get_logger(__name__)
 class AWSStepFunctionOrchestrator(BaseOrchestrator):
     """Orchestrator responsible for running pipelines using AWS Step Functions."""
 
-    workflow_execution_role: str = None
+    sagemaker_role: str = "arn:aws:iam::536079580069:role/service-role/AmazonSageMaker-ExecutionRole-20220521T140815"
+    workflow_execution_role: str = "arn:aws:iam::536079580069:role/AmazonSageMaker-StepFunctionsWorkflowExecutionRole"
     instance_type: str = "ml.t3.medium"
 
     custom_docker_base_image_name: Optional[str] = None
     # Class Configuration
     FLAVOR: ClassVar[str] = AWS_STEP_FUNCTION
+
+    def get_docker_image_name(
+        self, pipeline_name: str, step_name: Optional[str]
+    ) -> str:
+        """Returns the full docker image name including registry and tag."""
+
+        base_image_name = f"zenml-awsstepfunction-{pipeline_name}:"
+        if step_name:
+            tag = f"{step_name}"
+        else:
+            tag = "pipeline"
+        base_image_name += tag
+
+        container_registry = Repository().active_stack.container_registry
+
+        if container_registry:
+            registry_uri = container_registry.uri.rstrip("/")
+            return f"{registry_uri}/{base_image_name}"
+        else:
+            return base_image_name
 
     def prepare_pipeline_deployment(
         self,
@@ -85,23 +106,8 @@ class AWSStepFunctionOrchestrator(BaseOrchestrator):
 
         assert stack.container_registry  # should never happen due to validation
 
-        # Get AWS ECR credentials and upload image to container registry
-        # Should have AWS credentials set up first
-        # ex:
-        # export AWS_ACCESS_KEY_ID=youraccesskey
-        # export AWS_SECRET_ACCESS_KEY=yoursecretaccesskey
-        token = boto3.client("ecr").get_authorization_token()
-        username, password = (
-            base64.b64decode(
-                token["authorizationData"][0]["authorizationToken"]
-            )
-            .decode()
-            .split(":")
-        )
-        auth_config = {"username": username, "password": password}
-
         docker_client = DockerClient.from_env()
-        docker_client.images.push(image_name, auth_config=auth_config)
+        docker_client.images.push(image_name)
 
     def prepare_or_run_pipeline(
         self,
@@ -146,16 +152,15 @@ class AWSStepFunctionOrchestrator(BaseOrchestrator):
                 "orchestrator."
             )
 
-        image_name = self.get_docker_image_name(pipeline.name)
-        image_name = get_image_digest(image_name) or image_name
-
         # Create a callable for future compilation into a dsl.Pipeline.
         # list of states for aws step function to chain together
         states_dag = []
 
         # The command will be needed to eventually call the python step
         # within the docker container
+        session = sagemaker.Session()
         command = StepEntrypointConfiguration.get_entrypoint_command()
+        base_image = self.get_docker_image_name(pipeline.name)
         for step in sorted_steps:
             # The arguments are passed to configure the entrypoint of the
             # docker container when the step is called.
@@ -163,30 +168,49 @@ class AWSStepFunctionOrchestrator(BaseOrchestrator):
                 step=step,
                 pb2_pipeline=pb2_pipeline,
             )
+            entrypoint = " ".join(command + arguments)
 
-        session = sagemaker.Session()
-        estimator = sagemaker.estimator.Estimator(
-            image_name,
-            self.workflow_execution_role,
-            instance_count=1,
-            instance_type=self.instance_type,
-            sagemaker_session=session,
-        )
+            image_name = self.get_docker_image_name(pipeline.name, step.name)
+
+            build_docker_image(
+                build_context_path=get_source_root_path(),
+                image_name=image_name,
+                entrypoint=entrypoint,
+                base_image=base_image,
+                environment_vars=self._get_environment_vars_from_secrets(
+                    pipeline.secrets
+                ),
+            )
+
+            estimator = sagemaker.estimator.Estimator(
+                image_name,
+                self.sagemaker_role,
+                instance_count=1,
+                instance_type=self.instance_type,
+                sagemaker_session=session,
+            )
+
+            states_dag.append(
+                TrainingStep(
+                    state_id=step.name,
+                    estimator=estimator,
+                    job_name=step.name + self.uuid,
+                )
+            )
 
         # Get a filepath to use to save the finished yaml to
         assert runtime_configuration.run_name
 
         # write the argo pipeline yaml
         # AWS STEP FUNCTION
-        start_pass_state = Pass(state_id="MyPassState")
         # First we chain the start pass state
-        basic_path = Chain([start_pass_state])
+        Chain_path = Chain(states_dag)
 
-        basic_workflow = Workflow(
-            name="MyWorkflow_Simple",
-            definition=basic_path,
+        Chain_workflow = Workflow(
+            name=pipeline.name,
+            definition=Chain_path,
             role=self.workflow_execution_role,
         )
-        print(basic_workflow.definition.to_json(pretty=True))
+        print(Chain_workflow.definition.to_json(pretty=True))
 
-        basic_workflow.create()
+        Chain_workflow.create()
